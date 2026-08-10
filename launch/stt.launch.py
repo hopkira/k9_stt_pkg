@@ -20,7 +20,7 @@ def generate_launch_description():
             description='Silero probability required to start an utterance'),
         DeclareLaunchArgument(
             'trailing_audio_ms',
-            default_value='150',
+            default_value='100',
             description='Trailing silence retained for Whisper after endpoint detection'),
         DeclareLaunchArgument(
             'vad_end_threshold',
@@ -28,7 +28,7 @@ def generate_launch_description():
             description='Silero probability below which audio counts as trailing silence'),
         DeclareLaunchArgument(
             'silence_timeout',
-            default_value='0.5',
+            default_value='0.4',
             description='Continuous trailing silence required to end an utterance, seconds'),
         DeclareLaunchArgument(
             'vad_diagnostics',
