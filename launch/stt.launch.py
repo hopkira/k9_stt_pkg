@@ -11,6 +11,7 @@ def generate_launch_description():
     silence_timeout = LaunchConfiguration('silence_timeout')
     vad_diagnostics = LaunchConfiguration('vad_diagnostics')
     vad_log_interval_ms = LaunchConfiguration('vad_log_interval_ms')
+    trailing_audio_ms = LaunchConfiguration('trailing_audio_ms')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -18,12 +19,16 @@ def generate_launch_description():
             default_value='0.60',
             description='Silero probability required to start an utterance'),
         DeclareLaunchArgument(
+            'trailing_audio_ms',
+            default_value='150',
+            description='Trailing silence retained for Whisper after endpoint detection'),
+        DeclareLaunchArgument(
             'vad_end_threshold',
             default_value='0.35',
             description='Silero probability below which audio counts as trailing silence'),
         DeclareLaunchArgument(
             'silence_timeout',
-            default_value='0.6',
+            default_value='0.5',
             description='Continuous trailing silence required to end an utterance, seconds'),
         DeclareLaunchArgument(
             'vad_diagnostics',
@@ -44,17 +49,17 @@ def generate_launch_description():
                 'effective_state_topic': '/audio/effective_state',
                 'text_topic': '/speech_to_text/text',
                 'state_topic': '/speech_to_text/state',
-
+                'trailing_audio_ms': ParameterValue(trailing_audio_ms, value_type=int),
                 'sample_rate': 16000,
                 'silence_timeout': ParameterValue(silence_timeout, value_type=float),
-                'pre_roll_ms': 300,
+                'pre_roll_ms': 200,
                 'min_speech_ms': 160,
                 'max_speech_s': 30.0,
 
                 'model_path':
                     '/home/hopkira/whisper.cpp/models/ggml-large-v3-turbo.bin',
                 'vad_model_path':
-                    '/home/hopkira/whisper.cpp/models/ggml-silero-v6.2.0.bin',
+tra                    '/home/hopkira/whisper.cpp/models/ggml-silero-v6.2.0.bin',
 
                 'use_gpu': True,
                 'gpu_device': 0,

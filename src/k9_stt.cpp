@@ -86,6 +86,8 @@ public:
       "max_speech_s", 30.0);
     pre_roll_ms_ = declare_parameter<int>(
       "pre_roll_ms", 300);
+    trailing_audio_ms_ = declare_parameter<int>(
+      "trailing_audio_ms", 150);
     min_speech_ms_ = declare_parameter<int>(
       "min_speech_ms", 160);
 
@@ -135,6 +137,9 @@ public:
 
     silence_timeout_samples_ = static_cast<std::size_t>(
       static_cast<double>(sample_rate_) * silence_timeout_);
+
+    trailing_audio_samples_ = static_cast<std::size_t>(
+      sample_rate_ * std::max(0, trailing_audio_ms_) / 1000);
 
     max_speech_samples_ = static_cast<std::size_t>(
       static_cast<double>(sample_rate_) * max_speech_s_);
@@ -220,11 +225,13 @@ public:
       get_logger(),
       "K9 whisper.cpp GPU STT ready; whisper.cpp=%s, "
       "silence=%.2fs, max_speech=%.2fs, pre_roll=%dms, "
-      "min_speech=%dms, VAD start=%.2f end=%.2f diagnostics=%s",
+      "trailing_audio=%dms, min_speech=%dms, "
+      "VAD start=%.2f end=%.2f diagnostics=%s",
       whisper_version(),
       silence_timeout_,
       max_speech_s_,
       pre_roll_ms_,
+      trailing_audio_ms_,
       min_speech_ms_,
       vad_start_threshold_,
       vad_end_threshold_,
@@ -267,6 +274,19 @@ private:
     if (max_speech_s_ <= 0.0) {
       throw std::runtime_error(
               "max_speech_s must be greater than zero");
+    }
+
+    if (trailing_audio_ms_ < 0) {
+      throw std::runtime_error(
+              "trailing_audio_ms must be >= 0");
+    }
+
+    if (
+      static_cast<double>(trailing_audio_ms_) >
+      silence_timeout_ * 1000.0)
+    {
+      throw std::runtime_error(
+              "trailing_audio_ms must not exceed silence_timeout");
     }
 
     if (
@@ -521,7 +541,8 @@ private:
         max_speech_s_);
 
       queue_transcription(
-        "maximum utterance duration");
+        "maximum utterance duration",
+        false);
       return;
     }
 
@@ -543,7 +564,9 @@ private:
       trailing_silence_s,
       vad_end_threshold_);
 
-    queue_transcription("silence timeout");
+    queue_transcription(
+      "silence timeout",
+      true);
   }
 
   void maybe_log_vad(
@@ -594,7 +617,8 @@ private:
   }
 
   void queue_transcription(
-    const char * reason)
+    const char * reason,
+    bool trim_trailing_silence)
   {
     if (voiced_samples_ < min_voiced_samples_) {
       RCLCPP_INFO(
@@ -612,6 +636,26 @@ private:
 
     latched_.store(true);
 
+    std::size_t trimmed_samples = 0;
+
+    if (
+      trim_trailing_silence &&
+      silent_samples_ > trailing_audio_samples_)
+    {
+      const std::size_t requested_trim =
+        silent_samples_ - trailing_audio_samples_;
+
+      // voiced_samples_ has already passed the minimum-speech test, so the
+      // buffer contains genuine speech before the trailing-silence region.
+      // Still cap the resize defensively so malformed state can never
+      // underflow the vector size.
+      trimmed_samples =
+        std::min(requested_trim, speech_buffer_.size());
+
+      speech_buffer_.resize(
+        speech_buffer_.size() - trimmed_samples);
+    }
+
     WorkItem item{
       session_.load(),
       std::move(speech_buffer_)
@@ -619,6 +663,10 @@ private:
 
     const double audio_s =
       static_cast<double>(item.audio.size()) /
+      static_cast<double>(sample_rate_);
+
+    const double trimmed_s =
+      static_cast<double>(trimmed_samples) /
       static_cast<double>(sample_rate_);
 
     reset_capture();
@@ -641,11 +689,24 @@ private:
 
     work_cv_.notify_one();
 
-    RCLCPP_INFO(
-      get_logger(),
-      "Utterance complete (%s, %.2fs audio); queued for transcription",
-      reason,
-      audio_s);
+    if (trimmed_samples > 0) {
+      RCLCPP_INFO(
+        get_logger(),
+        "Utterance complete (%s, %.2fs audio); "
+        "trimmed %.2fs trailing silence, retained %dms; "
+        "queued for transcription",
+        reason,
+        audio_s,
+        trimmed_s,
+        trailing_audio_ms_);
+    } else {
+      RCLCPP_INFO(
+        get_logger(),
+        "Utterance complete (%s, %.2fs audio); "
+        "queued for transcription",
+        reason,
+        audio_s);
+    }
   }
 
   void append_pre_roll(
@@ -925,6 +986,7 @@ private:
   double max_speech_s_{30.0};
 
   int pre_roll_ms_{300};
+  int trailing_audio_ms_{150};
   int min_speech_ms_{160};
 
   std::string model_path_;
@@ -949,6 +1011,7 @@ private:
   std::size_t pre_roll_max_samples_{0};
   std::size_t min_voiced_samples_{0};
   std::size_t silence_timeout_samples_{0};
+  std::size_t trailing_audio_samples_{0};
   std::size_t max_speech_samples_{0};
 
   whisper_context * whisper_ctx_{nullptr};
