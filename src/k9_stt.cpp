@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <deque>
 #include <functional>
@@ -69,6 +70,10 @@ public:
   SpeechToTextNode()
   : Node("k9_stt")
   {
+    whisper_log_set(
+      &SpeechToTextNode::whisper_log_callback,
+      nullptr);
+
     audio_topic_ = declare_parameter<std::string>(
       "audio_topic", "/audio/raw");
     effective_state_topic_ = declare_parameter<std::string>(
@@ -260,6 +265,30 @@ private:
     std::uint64_t session;
     std::vector<float> audio;
   };
+
+  static void whisper_log_callback(
+    enum ggml_log_level level,
+    const char * text,
+    void * /* user_data */)
+  {
+    (void) level;
+
+    if (!text) {
+      return;
+    }
+
+    // Suppress extremely verbose per-frame Silero VAD messages while
+    // preserving all other whisper.cpp / ggml startup, warning, and error logs.
+    if (
+      std::strstr(
+        text,
+        "whisper_vad_detect_speech_no_reset:") != nullptr)
+    {
+      return;
+    }
+
+    std::fputs(text, stderr);
+  }
 
   void validate_parameters() {
     if (sample_rate_ != SAMPLE_RATE) {
