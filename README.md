@@ -15,9 +15,10 @@ This node simply listens to the audio frames captured and published by the Hotwo
 
 ## Testing the node
 
-Hotword must be running first:
+Hotword must be running first; check that it is publishing audio:
 
 ```bash
+ros2 run k9_system_pkg hotword  --ros-args  --params-file ~/k9_ws/src/k9_system_pkg/config/hotword.yaml
 ros2 topic hz /audio/raw
 ```
 
@@ -52,12 +53,12 @@ result
 
 ## Configuration options
 
-Start with:
+The default configuration options are quite aggressive, but seem to work well:
 
 ```yaml
-silence_timeout: 1.0
-pre_roll_ms: 300
+silence_timeout_sec: 0.4
+pre_roll_ms: 200
 min_speech_ms: 160
-beam_size: 5
-flash_attn: false
+beam_size: 1
+flash_attn: true
 ```
