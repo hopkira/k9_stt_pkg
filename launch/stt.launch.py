@@ -23,7 +23,7 @@ def generate_launch_description():
             description='Silero probability below which audio counts as trailing silence'),
         DeclareLaunchArgument(
             'silence_timeout',
-            default_value='1.0',
+            default_value='0.6',
             description='Continuous trailing silence required to end an utterance, seconds'),
         DeclareLaunchArgument(
             'vad_diagnostics',
@@ -58,9 +58,9 @@ def generate_launch_description():
 
                 'use_gpu': True,
                 'gpu_device': 0,
-                'flash_attn': False,
+                'flash_attn': True,
                 'whisper_threads': 4,
-                'beam_size': 5,
+                'beam_size': 1,
                 'language': 'en',
                 'vad_threads': 2,
 
