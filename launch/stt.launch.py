@@ -59,7 +59,7 @@ def generate_launch_description():
                 'model_path':
                     '/home/hopkira/whisper.cpp/models/ggml-large-v3-turbo.bin',
                 'vad_model_path':
-tra                    '/home/hopkira/whisper.cpp/models/ggml-silero-v6.2.0.bin',
+                    '/home/hopkira/whisper.cpp/models/ggml-silero-v6.2.0.bin',
 
                 'use_gpu': True,
                 'gpu_device': 0,
