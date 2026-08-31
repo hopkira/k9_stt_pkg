@@ -1,0 +1,1 @@
+/home/hopkira/k9_ws/src/k9_stt_pkg/build/k9_stt_pkg/ament_cmake_environment_hooks/local_setup.zsh
