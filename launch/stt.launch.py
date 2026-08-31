@@ -20,19 +20,19 @@ def generate_launch_description():
             description='Silero probability required to start an utterance'),
         DeclareLaunchArgument(
             'trailing_audio_ms',
-            default_value='100',
+            default_value='50',
             description='Trailing silence retained for Whisper after endpoint detection'),
         DeclareLaunchArgument(
             'vad_end_threshold',
-            default_value='0.35',
+            default_value='0.4',
             description='Silero probability below which audio counts as trailing silence'),
         DeclareLaunchArgument(
             'silence_timeout',
-            default_value='0.4',
+            default_value='0.3',
             description='Continuous trailing silence required to end an utterance, seconds'),
         DeclareLaunchArgument(
             'vad_diagnostics',
-            default_value='true',
+            default_value='false',
             description='Log VAD probability, RMS and peak while listening'),
         DeclareLaunchArgument(
             'vad_log_interval_ms',
@@ -57,7 +57,7 @@ def generate_launch_description():
                 'max_speech_s': 30.0,
 
                 'model_path':
-                    '/home/hopkira/whisper.cpp/models/ggml-large-v3-turbo.bin',
+                    '/home/hopkira/whisper.cpp/models/ggml-large-v3-turbo-q5_0.bin',
                 'vad_model_path':
                     '/home/hopkira/whisper.cpp/models/ggml-silero-v6.2.0.bin',
 
