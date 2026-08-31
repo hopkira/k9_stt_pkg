@@ -24,6 +24,9 @@
 namespace {
 
 constexpr const char * LISTENING = "LISTENING";
+constexpr const char * ACTIVITY_IDLE = "IDLE";
+constexpr const char * ACTIVITY_PROCESSING = "PROCESSING";
+constexpr const char * ACTIVITY_SPEAKING = "SPEAKING";
 constexpr int SAMPLE_RATE = 16000;
 constexpr std::size_t VAD_FRAME_SAMPLES = 512;  // Silero v6 @ 16 kHz = 32 ms
 
@@ -82,6 +85,8 @@ public:
       "text_topic", "/speech_to_text/text");
     diagnostic_topic_ = declare_parameter<std::string>(
       "state_topic", "/speech_to_text/state");
+    activity_topic_ = declare_parameter<std::string>(
+      "activity_topic", "/interaction/activity");
 
     sample_rate_ = declare_parameter<int>(
       "sample_rate", SAMPLE_RATE);
@@ -95,6 +100,8 @@ public:
       "trailing_audio_ms", 150);
     min_speech_ms_ = declare_parameter<int>(
       "min_speech_ms", 160);
+    post_speech_guard_ms_ = declare_parameter<int>(
+      "post_speech_guard_ms", 200);
 
     model_path_ = declare_parameter<std::string>(
       "model_path",
@@ -200,6 +207,9 @@ public:
     diagnostic_pub_ =
       create_publisher<std_msgs::msg::String>(diagnostic_topic_, 10);
 
+    activity_pub_ =
+      create_publisher<std_msgs::msg::String>(activity_topic_, 10);
+
     rclcpp::QoS audio_qos(rclcpp::KeepLast(10));
     audio_qos.best_effort().durability_volatile();
 
@@ -221,16 +231,27 @@ public:
         this,
         std::placeholders::_1));
 
+    activity_sub_ =
+      create_subscription<std_msgs::msg::String>(
+      activity_topic_,
+      10,
+      std::bind(
+        &SpeechToTextNode::activity_callback,
+        this,
+        std::placeholders::_1));
+
     worker_ =
       std::thread(&SpeechToTextNode::worker_loop, this);
 
     publish_state("inactive");
+    publish_activity(ACTIVITY_IDLE);
 
     RCLCPP_INFO(
       get_logger(),
       "K9 whisper.cpp GPU STT ready; whisper.cpp=%s, "
       "silence=%.2fs, max_speech=%.2fs, pre_roll=%dms, "
       "trailing_audio=%dms, min_speech=%dms, "
+      "post_speech_guard=%dms, "
       "VAD start=%.2f end=%.2f diagnostics=%s",
       whisper_version(),
       silence_timeout_,
@@ -238,6 +259,7 @@ public:
       pre_roll_ms_,
       trailing_audio_ms_,
       min_speech_ms_,
+      post_speech_guard_ms_,
       vad_start_threshold_,
       vad_end_threshold_,
       vad_diagnostics_ ? "on" : "off");
@@ -310,6 +332,11 @@ private:
               "trailing_audio_ms must be >= 0");
     }
 
+    if (post_speech_guard_ms_ < 0) {
+      throw std::runtime_error(
+              "post_speech_guard_ms must be >= 0");
+    }
+
     if (
       static_cast<double>(trailing_audio_ms_) >
       silence_timeout_ * 1000.0)
@@ -361,24 +388,39 @@ private:
       }
 
       listening_.store(true);
-      latched_.store(false);
+      resume_pending_ = false;
 
       reset_capture();
       whisper_vad_reset_state(vad_ctx_);
 
-      publish_state("listening");
+      // LISTENING is the persistent interaction mode.  Capture is only
+      // enabled while the transient activity is IDLE.  If K9 is already
+      // PROCESSING or SPEAKING, remain latched until activity returns to IDLE.
+      const bool activity_allows_listening =
+        interaction_activity_ == ACTIVITY_IDLE;
+
+      latched_.store(!activity_allows_listening);
+
+      publish_state(
+        activity_allows_listening ?
+        "listening" :
+        "inhibited");
 
       RCLCPP_INFO(
         get_logger(),
-        "%s -> LISTENING; STT session %lu",
+        "%s -> LISTENING; STT session %lu%s",
         old_state.empty() ? "<unset>" : old_state.c_str(),
-        static_cast<unsigned long>(s));
+        static_cast<unsigned long>(s),
+        activity_allows_listening ?
+        "" :
+        " (capture inhibited by interaction activity)");
 
       return;
     }
 
     listening_.store(false);
     latched_.store(true);
+    resume_pending_ = false;
 
     if (!publish_stale_results_) {
       purge_pending_work("left LISTENING");
@@ -386,6 +428,14 @@ private:
 
     reset_capture();
     whisper_vad_reset_state(vad_ctx_);
+
+    // If STT itself had placed K9 into PROCESSING and the user changes
+    // interaction mode before a response is produced, clear that temporary
+    // presentation.  SPEAKING belongs to voice_piper and is not overridden
+    // here.
+    if (interaction_activity_ == ACTIVITY_PROCESSING) {
+      publish_activity(ACTIVITY_IDLE);
+    }
 
     publish_state("inactive");
 
@@ -396,10 +446,119 @@ private:
       new_state.c_str());
   }
 
+  void activity_callback(
+    const std_msgs::msg::String::SharedPtr msg)
+  {
+    const auto new_activity = normalise(msg->data);
+
+    if (
+      new_activity != ACTIVITY_IDLE &&
+      new_activity != ACTIVITY_PROCESSING &&
+      new_activity != ACTIVITY_SPEAKING)
+    {
+      RCLCPP_WARN(
+        get_logger(),
+        "Ignoring unknown interaction activity: %s",
+        msg->data.c_str());
+      return;
+    }
+
+    if (new_activity == interaction_activity_) {
+      return;
+    }
+
+    const auto old_activity = interaction_activity_;
+    interaction_activity_ = new_activity;
+
+    if (
+      new_activity == ACTIVITY_PROCESSING ||
+      new_activity == ACTIVITY_SPEAKING)
+    {
+      // Keep microphone capture physically running elsewhere in the audio
+      // stack, but prevent STT from assembling utterances while K9 is
+      // processing or speaking.  This avoids self-recognition during TTS.
+      latched_.store(true);
+      resume_pending_ = false;
+
+      reset_capture();
+      whisper_vad_reset_state(vad_ctx_);
+
+      if (listening_.load()) {
+        publish_state(
+          new_activity == ACTIVITY_SPEAKING ?
+          "speaking_inhibited" :
+          "processing_inhibited");
+      }
+
+      return;
+    }
+
+    // Activity has returned to IDLE.  If the persistent interaction mode is
+    // LISTENING, resume STT.  After SPEAKING, deliberately wait a short guard
+    // period so PipeWire/speaker/room tail audio cannot be mistaken for the
+    // user's next utterance.
+    if (!listening_.load()) {
+      resume_pending_ = false;
+      latched_.store(true);
+      return;
+    }
+
+    reset_capture();
+    whisper_vad_reset_state(vad_ctx_);
+
+    if (
+      old_activity == ACTIVITY_SPEAKING &&
+      post_speech_guard_ms_ > 0)
+    {
+      latched_.store(true);
+      resume_pending_ = true;
+      resume_after_ =
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(post_speech_guard_ms_);
+
+      publish_state("post_speech_guard");
+
+      RCLCPP_INFO(
+        get_logger(),
+        "TTS complete; STT will resume after %d ms guard",
+        post_speech_guard_ms_);
+
+      return;
+    }
+
+    resume_pending_ = false;
+    latched_.store(false);
+    publish_state("listening");
+  }
+
   void audio_callback(
     const k9_interfaces_pkg::msg::AudioFrame::SharedPtr msg)
   {
-    if (!listening_.load() || latched_.load()) {
+    if (!listening_.load()) {
+      return;
+    }
+
+    // A post-TTS guard is implemented without blocking the ROS executor.
+    // Audio frames are simply ignored until the deadline passes.
+    if (resume_pending_) {
+      if (std::chrono::steady_clock::now() < resume_after_) {
+        return;
+      }
+
+      resume_pending_ = false;
+      latched_.store(false);
+
+      reset_capture();
+      whisper_vad_reset_state(vad_ctx_);
+
+      publish_state("listening");
+
+      RCLCPP_INFO(
+        get_logger(),
+        "Post-speech guard complete; STT listening resumed");
+    }
+
+    if (latched_.load()) {
       return;
     }
 
@@ -704,6 +863,9 @@ private:
     // Start the next utterance with a fresh state.
     whisper_vad_reset_state(vad_ctx_);
 
+    // VAD has accepted a complete utterance.  From this instant until
+    // voice_piper begins actual playback, K9 should present PROCESSING.
+    publish_activity(ACTIVITY_PROCESSING);
     publish_state("transcribing");
 
     {
@@ -867,6 +1029,7 @@ private:
             "whisper_full failed rc=%d",
             rc);
 
+          publish_activity(ACTIVITY_IDLE);
           allow_retry(item.session);
         }
 
@@ -924,6 +1087,7 @@ private:
           "No useful text; allowing another utterance "
           "in current LISTENING session");
 
+        publish_activity(ACTIVITY_IDLE);
         allow_retry(item.session);
         continue;
       }
@@ -931,6 +1095,9 @@ private:
       std_msgs::msg::String out;
       out.data = text;
 
+      // Keep PROCESSING active after the transcription result is published.
+      // The conversation/LLM pipeline now owns the response path;
+      // voice_piper will advance activity to SPEAKING and finally IDLE.
       text_pub_->publish(out);
       publish_state("result");
 
@@ -986,9 +1153,23 @@ private:
       listening_.load() &&
       session_.load() == s)
     {
+      resume_pending_ = false;
       latched_.store(false);
       publish_state("listening");
     }
+  }
+
+  void publish_activity(
+    const std::string & activity)
+  {
+    if (!activity_pub_) {
+      return;
+    }
+
+    std_msgs::msg::String msg;
+    msg.data = activity;
+
+    activity_pub_->publish(msg);
   }
 
   void publish_state(
@@ -1008,6 +1189,7 @@ private:
   std::string effective_state_topic_;
   std::string text_topic_;
   std::string diagnostic_topic_;
+  std::string activity_topic_;
 
   int sample_rate_{SAMPLE_RATE};
 
@@ -1017,6 +1199,7 @@ private:
   int pre_roll_ms_{300};
   int trailing_audio_ms_{150};
   int min_speech_ms_{160};
+  int post_speech_guard_ms_{200};
 
   std::string model_path_;
   std::string vad_model_path_;
@@ -1052,6 +1235,9 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr
     diagnostic_pub_;
 
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr
+    activity_pub_;
+
   rclcpp::Subscription<
     k9_interfaces_pkg::msg::AudioFrame>::SharedPtr
     audio_sub_;
@@ -1060,7 +1246,12 @@ private:
     std_msgs::msg::String>::SharedPtr
     state_sub_;
 
+  rclcpp::Subscription<
+    std_msgs::msg::String>::SharedPtr
+    activity_sub_;
+
   std::string effective_state_;
+  std::string interaction_activity_{ACTIVITY_IDLE};
 
   std::atomic<bool> listening_{false};
   std::atomic<bool> latched_{true};
@@ -1078,6 +1269,10 @@ private:
   std::size_t silent_samples_{0};
 
   bool in_speech_{false};
+  bool resume_pending_{false};
+
+  std::chrono::steady_clock::time_point
+    resume_after_{};
 
   std::chrono::steady_clock::time_point
     last_vad_log_{};
