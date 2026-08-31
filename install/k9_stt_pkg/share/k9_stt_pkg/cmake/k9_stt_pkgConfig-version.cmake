@@ -1,1 +1,0 @@
-/home/hopkira/k9_ws/src/k9_stt_pkg/build/k9_stt_pkg/ament_cmake_core/k9_stt_pkgConfig-version.cmake
