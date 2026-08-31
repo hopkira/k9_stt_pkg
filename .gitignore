@@ -1,0 +1,50 @@
+# ROS 2 / colcon build products
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# C/C++ build artefacts
+*.o
+*.so
+*.a
+*.out
+compile_commands.json
+CMakeCache.txt
+CMakeFiles/
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.tmp
+*.log
+
+# Whisper / ML models
+*.bin
+*.gguf
+*.onnx
+*.pt
+*.pth
+
+# Audio test/output files
+*.wav
+*.mp3
+*.flac
