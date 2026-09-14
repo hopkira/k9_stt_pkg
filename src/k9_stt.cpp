@@ -67,6 +67,24 @@ bool useful_text(const std::string & s) {
 
 }  // namespace
 
+static void whisper_log_callback(
+    ggml_log_level level,
+    const char * text,
+    void * user_data)
+{
+    (void) user_data;
+
+    if (
+        level == GGML_LOG_LEVEL_ERROR ||
+        level == GGML_LOG_LEVEL_WARN
+    ) {
+        fputs(
+            text,
+            stderr
+        );
+    }
+}
+
 
 class SpeechToTextNode : public rclcpp::Node {
 public:
@@ -293,23 +311,19 @@ private:
     const char * text,
     void * /* user_data */)
   {
-    (void) level;
-
     if (!text) {
       return;
     }
 
-    // Suppress extremely verbose per-frame Silero VAD messages while
-    // preserving all other whisper.cpp / ggml startup, warning, and error logs.
+    // Only retain warnings and errors from whisper.cpp / GGML.
+    // Routine model-loading, CUDA and VAD diagnostics are suppressed.
     if (
-      std::strstr(
-        text,
-        "whisper_vad_detect_speech_no_reset:") != nullptr)
+      level == GGML_LOG_LEVEL_WARN ||
+      level == GGML_LOG_LEVEL_ERROR)
     {
-      return;
+      std::fputs(text, stderr);
+      std::fflush(stderr);
     }
-
-    std::fputs(text, stderr);
   }
 
   void validate_parameters() {
