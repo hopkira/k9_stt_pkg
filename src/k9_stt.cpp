@@ -67,25 +67,6 @@ bool useful_text(const std::string & s) {
 
 }  // namespace
 
-static void whisper_log_callback(
-    ggml_log_level level,
-    const char * text,
-    void * user_data)
-{
-    (void) user_data;
-
-    if (
-        level == GGML_LOG_LEVEL_ERROR ||
-        level == GGML_LOG_LEVEL_WARN
-    ) {
-        fputs(
-            text,
-            stderr
-        );
-    }
-}
-
-
 class SpeechToTextNode : public rclcpp::Node {
 public:
   SpeechToTextNode()
