@@ -12,6 +12,7 @@ def generate_launch_description():
     vad_diagnostics = LaunchConfiguration('vad_diagnostics')
     vad_log_interval_ms = LaunchConfiguration('vad_log_interval_ms')
     trailing_audio_ms = LaunchConfiguration('trailing_audio_ms')
+    log_level = LaunchConfiguration('log_level')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -38,12 +39,21 @@ def generate_launch_description():
             'vad_log_interval_ms',
             default_value='500',
             description='Minimum interval between VAD diagnostic log messages'),
-
+        DeclareLaunchArgument(
+            'log_level',
+            default_value='info',
+            description='ROS logging level',
+        ),
         Node(
             package='k9_stt_pkg',
             executable='k9_stt',
             name='k9_stt',
             output='screen',
+            arguments=[
+                '--ros-args',
+                '--log-level',
+                log_level,
+            ],
             parameters=[{
                 'audio_topic': '/audio/raw',
                 'effective_state_topic': '/audio/effective_state',
